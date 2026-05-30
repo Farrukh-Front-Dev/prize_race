@@ -11,7 +11,7 @@ declare global {
     Telegram?: {
       WebApp: {
         initData: string
-        initDataUnsafe: Record<string, any>
+        initDataUnsafe: Record<string, unknown>
         ready: () => void
         expand: () => void
         close: () => void
