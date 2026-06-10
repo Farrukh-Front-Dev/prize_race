@@ -1,0 +1,35 @@
+# ===== Backend =====
+backend/.env
+backend/venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/services/__pycache__/
+backend/app/routes/__pycache__/
+backend/test.db
+backend/*.db
+*.pyc
+__pycache__/
+
+# ===== Frontend =====
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== IDE =====
+.idea/
+*.swp
+*.swo
+
+# ===== Logs =====
+*.log
+npm-debug.log*
+
+# ===== Build artifacts =====
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
+frontend/vite.config.d.ts
