@@ -1,55 +1,21 @@
-/**
- * Leaderboard Page
- * Shows event leaderboard with top participants
- */
+import React from 'react'
+import { Header, Container } from '../shared/components/layout'
+import { Leaderboard, useLeaderboard } from '../features/leaderboard'
+import { useEvent, useEventUiStore } from '../features/events'
+import { useAuthStore } from '../features/auth'
 
-import React, { useEffect } from 'react'
-import { useEventStore } from '../store/eventStore'
-import { useAuthStore } from '../store/authStore'
-import { Header, Container } from '../components/layout'
-import { Leaderboard } from '../components/leaderboard'
-
-interface LeaderboardPageProps {
-  eventId: number
-  onBack?: () => void
-}
-
-export const LeaderboardPage: React.FC<LeaderboardPageProps> = ({
-  eventId,
-  onBack,
-}) => {
-  const user = useAuthStore((state) => state.user)
-  const { currentEvent, leaderboard, isLoading, fetchEvent, fetchLeaderboard } =
-    useEventStore()
-
-  useEffect(() => {
-    fetchEvent(eventId)
-    fetchLeaderboard(eventId)
-  }, [eventId, fetchEvent, fetchLeaderboard])
+export const LeaderboardPage: React.FC<{ eventId: number }> = ({ eventId }) => {
+  const user = useAuthStore((s) => s.user)
+  const clearSelection = useEventUiStore((s) => s.clearSelection)
+  const { data: event } = useEvent(eventId)
+  const { data: entries = [], isLoading } = useLeaderboard(eventId)
+  const currentUserEntry = entries.find((e) => e.user_id === user?.id) ?? null
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-      <Header
-        title={currentEvent?.title || 'Leaderboard'}
-        subtitle="Top Participants"
-        action={
-          onBack && (
-            <button
-              onClick={onBack}
-              className="text-white hover:opacity-80"
-            >
-              ← Back
-            </button>
-          )
-        }
-      />
-
-      <Container className="py-6">
-        <Leaderboard
-          entries={leaderboard}
-          isLoading={isLoading}
-          currentUserId={user?.id}
-        />
+    <div className="min-h-screen bg-gray-50 pb-8">
+      <Header title={event?.title ?? 'Leaderboard'} subtitle={`${entries.length} participant${entries.length !== 1 ? 's' : ''}`} onBack={clearSelection} />
+      <Container className="py-4">
+        <Leaderboard entries={entries} isLoading={isLoading} currentUserId={user?.id} currentUserEntry={currentUserEntry} />
       </Container>
     </div>
   )

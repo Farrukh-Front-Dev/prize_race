@@ -1,96 +1,73 @@
 """
-PostgreSQL Sync Service
-Batch sync from Tarantool to PostgreSQL for persistence
-"""
+app/services/sync_service.py
+──────────────────────────────
+Background worker: drains Tarantool sync_queue → PostgreSQL.
 
+Strategy:
+  - Tarantool is the source of truth for XP during an active event
+  - This worker persists XP deltas to Participant.total_xp in batches
+  - Each record is committed independently to minimise rollback scope
+  - Runs as an asyncio background task launched from app lifespan
+"""
 import asyncio
 import logging
-from sqlalchemy.orm import Session
-from app.models import Participant
-from app.services.tarantool_service import get_leaderboard_service
+
+from app.core.config import get_settings
+from app.core.database import SessionLocal
+from app.repositories.participant_repository import ParticipantRepository
+from app.services.leaderboard_service import get_leaderboard_service
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
-class PostgresSyncService:
-    """
-    Batch sync service for persisting Tarantool data to PostgreSQL.
-    
-    Strategy:
-    - Tarantool handles real-time updates (fast)
-    - PostgreSQL gets batch updates (efficient)
-    - Reduces database load by 90%+
-    """
+def _process_batch() -> int:
+    """Sync one batch synchronously (called via asyncio.to_thread)."""
+    svc = get_leaderboard_service()
+    pending = svc.get_pending_syncs(limit=settings.sync_batch_size)
+    if not pending:
+        return 0
 
-    def __init__(self, db: Session):
-        self.db = db
-        self.tarantool = get_leaderboard_service()
+    processed = 0
+    db = SessionLocal()
+    repo = ParticipantRepository(db)
 
-    async def sync_pending_xp(self, batch_size: int = 100):
-        """
-        Sync pending XP changes from Tarantool to PostgreSQL
-        
-        Args:
-            batch_size: Number of records to sync per batch
-        """
-        try:
-            pending = self.tarantool.get_pending_syncs(limit=batch_size)
-
-            if not pending:
-                logger.debug("No pending syncs")
-                return
-
-            logger.info(f"Syncing {len(pending)} records to PostgreSQL")
-
-            for sync_record in pending:
-                sync_id, event_id, user_id, xp_delta, status = sync_record
-
-                try:
-                    # Find participant
-                    participant = (
-                        self.db.query(Participant)
-                        .filter(
-                            Participant.user_id == user_id,
-                            Participant.event_id == event_id,
-                        )
-                        .first()
-                    )
-
-                    if participant:
-                        # Update XP
-                        participant.total_xp += xp_delta
-                        self.db.commit()
-
-                        # Mark as synced
-                        self.tarantool.mark_sync_done(sync_id)
-                        logger.debug(
-                            f"Synced XP for user {user_id} in event {event_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Participant not found: user {user_id}, event {event_id}"
-                        )
-
-                except Exception as e:
-                    logger.error(f"Error syncing record {sync_id}: {e}")
-                    self.db.rollback()
-
-        except Exception as e:
-            logger.error(f"Error in sync_pending_xp: {e}")
-
-    async def start_sync_worker(self, interval_seconds: int = 5):
-        """
-        Start background worker for continuous sync
-        
-        Args:
-            interval_seconds: Sync interval
-        """
-        logger.info(f"Starting PostgreSQL sync worker (interval: {interval_seconds}s)")
-
-        while True:
+    try:
+        for record in pending:
+            sync_id, event_id, user_id, xp_delta, _ = record
             try:
-                await self.sync_pending_xp()
-                await asyncio.sleep(interval_seconds)
-            except Exception as e:
-                logger.error(f"Error in sync worker: {e}")
-                await asyncio.sleep(interval_seconds)
+                participant = repo.get_participant(user_id, event_id)
+                if participant:
+                    repo.add_xp(participant, xp_delta)
+                    svc.mark_sync_done(sync_id)
+                    processed += 1
+                else:
+                    logger.warning(
+                        "sync: participant not found user=%d event=%d",
+                        user_id, event_id,
+                    )
+            except Exception as exc:
+                db.rollback()
+                logger.error("sync error on record %d: %s", sync_id, exc)
+    finally:
+        db.close()
+
+    return processed
+
+
+async def run_sync_worker() -> None:
+    """Infinite async loop — launched as an asyncio.Task in app lifespan."""
+    interval = settings.sync_interval_seconds
+    logger.info("Sync worker started (interval=%ds, batch=%d)", interval, settings.sync_batch_size)
+
+    while True:
+        try:
+            count = await asyncio.to_thread(_process_batch)
+            if count:
+                logger.debug("Synced %d XP records → PostgreSQL", count)
+        except asyncio.CancelledError:
+            logger.info("Sync worker cancelled.")
+            raise
+        except Exception as exc:
+            logger.error("Sync worker unexpected error: %s", exc)
+        await asyncio.sleep(interval)

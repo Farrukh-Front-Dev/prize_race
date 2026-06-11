@@ -1,6 +1,3 @@
-/**
- * Pages Barrel Export
- */
-
-export { HomePage } from './HomePage'
+export { HomePage }        from './HomePage'
+export { EventDetailPage } from './EventDetailPage'
 export { LeaderboardPage } from './LeaderboardPage'

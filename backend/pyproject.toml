@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "prizerace-backend"
+version = "1.0.0"
+description = "PrizeRace — Web3 Sprint Platform (Telegram Mini App + TON)"
+requires-python = ">=3.11"
+
+dependencies = [
+    # Web framework
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    # Pydantic v2
+    "pydantic==2.5.0",
+    "pydantic-settings==2.1.0",
+    # Database — PostgreSQL
+    "sqlalchemy==2.0.23",
+    "psycopg2-binary==2.9.9",
+    "alembic==1.13.0",
+    # Database — Tarantool
+    "tarantool==1.2.0",
+    # HTTP client (TON API, Telegram Bot API)
+    "httpx==0.25.2",
+    # Utilities
+    "python-dotenv==1.0.0",
+    "python-multipart==0.0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.23.2",
+    "httpx==0.25.2",       # TestClient transport
+    "pytest-cov==4.1.0",
+    "ruff==0.1.9",
+    "mypy==1.7.1",
+]
+prod = []  # same as base, kept for Dockerfile clarity
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# ── ruff (linter + formatter) ─────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.isort]
+known-first-party = ["app"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+strict = false

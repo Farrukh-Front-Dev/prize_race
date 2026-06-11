@@ -1,79 +1,110 @@
+"""
+app/main.py
+────────────
+FastAPI application factory and lifespan manager.
+"""
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from app.database import init_db
-from app.middleware import TelegramAuthMiddleware, IdempotencyLockMiddleware
-from app.routes import auth, events, tasks, wallet
-from app.services.tarantool_service import get_leaderboard_service
-import logging
 
-logging.basicConfig(level=logging.INFO)
+from app.api.v1.router import v1_router
+from app.core.config import get_settings
+from app.core.database import init_db
+from app.core.exceptions import register_exception_handlers
+from app.core.middleware import IdempotencyLockMiddleware, TelegramAuthMiddleware
+from app.services.leaderboard_service import bootstrap_tarantool_spaces
+from app.services.sync_service import run_sync_worker
+
+settings = get_settings()
+
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Startup and shutdown events
-    """
-    # Startup
-    logger.info("🚀 Starting PrizeRace API...")
-    init_db()
-    tarantool_service = get_leaderboard_service()
-    logger.info("✅ Tarantool Leaderboard Service initialized")
-    logger.info("✅ Telegram Validation Service ready")
-    logger.info("✅ TON Integration Service ready")
+    logger.info("Starting PrizeRace API…")
 
-    yield
+    init_db()   # DEV: creates tables; PROD: Alembic runs in Dockerfile CMD
+    logger.info("PostgreSQL ready.")
 
-    # Shutdown
-    logger.info("🛑 Shutting down PrizeRace API...")
+    bootstrap_tarantool_spaces()
+    logger.info("Tarantool ready.")
 
+    sync_task = asyncio.create_task(run_sync_worker())
+    logger.info("Sync worker started.")
 
-# Initialize database
-init_db()
+    yield  # ── application runs ────────────────────────────────────────────
 
-# Create FastAPI app
-app = FastAPI(
-    title="PrizeRace API",
-    description="Web3 Sprint Platform with Telegram Mini App",
-    version="1.0.0",
-    lifespan=lifespan,
-)
-
-# Add middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(IdempotencyLockMiddleware)
-app.add_middleware(TelegramAuthMiddleware)
-
-# Include routers
-app.include_router(auth.router)
-app.include_router(events.router)
-app.include_router(tasks.router)
-app.include_router(wallet.router)
+    logger.info("Shutting down…")
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Done.")
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok"}
+# ── App factory ───────────────────────────────────────────────────────────────
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="PrizeRace API",
+        description="Web3 Sprint Platform — Telegram Mini App + TON blockchain",
+        version="1.0.0",
+        lifespan=lifespan,
+        docs_url="/docs" if settings.debug else None,
+        redoc_url="/redoc" if settings.debug else None,
+        openapi_url="/openapi.json" if settings.debug else None,
+    )
+
+    # ── CORS ──────────────────────────────────────────────────────────────
+    # credentials=True requires explicit origins — wildcard is only for dev
+    cors_origins = ["*"] if settings.debug else ["https://web.telegram.org"]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ── Custom middleware (starlette applies bottom-up) ───────────────────
+    # 2nd: idempotency lock (needs telegram_id already on request.state)
+    app.add_middleware(IdempotencyLockMiddleware)
+    # 1st: auth (populates request.state.telegram_id)
+    app.add_middleware(TelegramAuthMiddleware)
+
+    # ── Domain exception handlers ─────────────────────────────────────────
+    register_exception_handlers(app)
+
+    # ── Routes ────────────────────────────────────────────────────────────
+    app.include_router(v1_router, prefix=settings.api_v1_prefix)
+
+    # ── Utility ───────────────────────────────────────────────────────────
+    @app.get("/health", include_in_schema=False)
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return {"name": "PrizeRace API", "version": "1.0.0"}
+
+    return app
 
 
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "name": "PrizeRace API",
-        "version": "1.0.0",
-        "docs": "/docs",
-    }
+app = create_app()
 
+# ── Dev entrypoint ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
@@ -82,5 +113,5 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=settings.debug,
     )
