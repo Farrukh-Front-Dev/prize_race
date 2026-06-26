@@ -4,6 +4,7 @@ app/api/v1/wallet.py
 TON wallet connect and deposit validation.
 """
 import logging
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
